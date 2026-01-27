@@ -1,5 +1,5 @@
 -Stylish Financial Dashboard (connects to ML backend, has Chatbot and Backtest Tabs)
 -Machine Learning Backend working and making predictions
 ( need to use noSQL database instead of csv files for data and get daily or weekly data and update dashboard with predictions)
--Chatbot for signal creation
+-Chatbot for signal creation (Using GPT 4o)
 Backtest Engine (have code need to verify it works)
