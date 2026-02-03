@@ -1,0 +1,10 @@
+pandas>=1.5.0
+numpy>=1.21.0
+matplotlib>=3.5.0
+yfinance>=0.2.0
+scipy>=1.7.0        # For statistical calculations
+ta>=0.10.1          # Technical Analysis (RSI, ADX, etc.)
+
+# Note: tkinter is part of the standard library,
+# but on some Linux distros you may need:
+# sudo apt-get install python3-tk

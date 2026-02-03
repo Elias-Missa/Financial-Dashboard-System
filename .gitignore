@@ -1,0 +1,57 @@
+# ===================
+# Secrets & Config
+# ===================
+config.R
+.env
+*.env
+secrets/
+
+# ===================
+# Python
+# ===================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+ENV/
+env/
+*.egg-info/
+dist/
+build/
+
+# ===================
+# R
+# ===================
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+*.rds
+
+# ===================
+# Data & Output
+# ===================
+data/cache_*
+output/
+*.csv
+*.xlsx
+*.parquet
+
+# ===================
+# IDE & OS
+# ===================
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ===================
+# Logs
+# ===================
+*.log
+logs/

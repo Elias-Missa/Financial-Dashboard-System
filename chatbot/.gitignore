@@ -1,0 +1,33 @@
+# R
+.Rhistory
+.RData
+.Rproj.user
+*.Rproj
+
+# Output files
+output/
+*.csv
+
+# API Keys and Secrets (NEVER COMMIT THESE!)
+config.R
+R/config.R
+.env
+.env.local
+*.key
+*_secret.R
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+
