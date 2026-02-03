@@ -29,7 +29,7 @@ def calculate_metrics(df, strategy_name=None):
     has_sell_signals = (df["Signal"] == -1).any()
     
     if not has_buy_signals and not has_sell_signals:
-        print("⚠️ No signals found in the strategy output.")
+        print("Warning: No signals found in the strategy output.")
         return None
     
     # Check if we have any signal changes
@@ -46,7 +46,7 @@ def calculate_metrics(df, strategy_name=None):
         exits = df.index[df["Signal"] == -1]
     
     if len(entries) == 0 and len(exits) == 0:
-        print("⚠️ No trades executed.")
+        print("Warning: No trades executed.")
         return None
 
     # Calculate total return from equity curve
@@ -181,7 +181,7 @@ def calculate_metrics(df, strategy_name=None):
     # Handle edge case where no trades were completed (we had signals but not complete trades)
     if len(trades_df) == 0:
         if has_buy_signals or has_sell_signals:
-            print("⚠️ Found signals but no complete trades (entry + exit).")
+            print("Warning: Found signals but no complete trades (entry + exit).")
             # Create a basic metrics dict with available information
             basic_metrics = {
                 "Total Trades": 0,
@@ -200,7 +200,7 @@ def calculate_metrics(df, strategy_name=None):
                 "Time Active": "N/A"
             }
             return basic_metrics, pd.DataFrame()
-        print("⚠️ No complete trades found.")
+        print("Warning: No complete trades found.")
         return None
         
     win_rate = (trades_df["Return %"] > 0).mean()
@@ -265,7 +265,7 @@ def calculate_metrics(df, strategy_name=None):
         "Strategy Type": "Short" if is_short_strategy else "Long"
     }
     
-    print("\n📈 Performance Metrics:")
+    print("\nPerformance Metrics:")
     for metric, value in metrics.items():
         print(f"{metric:<20}: {value}")
     
@@ -381,7 +381,7 @@ def plot_equity_curve(df, show_plot=False):
 # -----------------------------------------------------
 def main(ticker, strategy_name, start_date=None, end_date=None, show_plot=False):
     """Main backtesting function."""
-    print(f"🔍 Getting {ticker} data...")
+    print(f"Getting {ticker} data...")
     
     # Convert datetime objects to pandas Timestamp if needed
     if start_date and not isinstance(start_date, pd.Timestamp):
@@ -395,43 +395,43 @@ def main(ticker, strategy_name, start_date=None, end_date=None, show_plot=False)
     # Get price data with date range directly
     try:
         df = get_data.get_data(ticker, start_date=start_date, end_date=end_date)
-        print(f"📅 Data retrieved from {df.index[0].strftime('%Y-%m-%d')} to {df.index[-1].strftime('%Y-%m-%d')}")
+        print(f"Data retrieved from {df.index[0].strftime('%Y-%m-%d')} to {df.index[-1].strftime('%Y-%m-%d')}")
     except Exception as e:
-        print(f"❌ Error getting data: {str(e)}")
+        print(f"Error getting data: {str(e)}")
         return None, None, None
     
     if df.empty:
-        print(f"❌ No data available for {ticker} in the specified date range.")
+        print(f"No data available for {ticker} in the specified date range.")
         return None, None, None
     
     # Load and run strategy
     try:
-        print(f"📊 Applying strategy: {strategy_name}")
+        print(f"Applying strategy: {strategy_name}")
         strategy_module = importlib.import_module(f"strategies.{strategy_name}")
         strategy_df = strategy_module.generate_signals(df.copy())
         
         # Verify the strategy returned a valid dataframe
         if strategy_df is None:
-            print("❌ Strategy returned None instead of a DataFrame.")
+            print("Strategy returned None instead of a DataFrame.")
             return None, None, None
             
         if not isinstance(strategy_df, pd.DataFrame):
-            print(f"❌ Strategy returned {type(strategy_df)} instead of a DataFrame.")
+            print(f"Strategy returned {type(strategy_df)} instead of a DataFrame.")
             return None, None, None
             
         if strategy_df.empty:
-            print("❌ Strategy returned an empty DataFrame.")
+            print("Strategy returned an empty DataFrame.")
             return None, None, None
             
         # Verify required columns exist
         required_columns = ["Date", "Close", "Signal", "EquityCurve"]
         missing_columns = [col for col in required_columns if col not in strategy_df.columns]
         if missing_columns:
-            print(f"❌ Strategy result missing required columns: {', '.join(missing_columns)}")
+            print(f"Strategy result missing required columns: {', '.join(missing_columns)}")
             return None, None, None
             
     except Exception as e:
-        print(f"❌ Error applying strategy: {str(e)}")
+        print(f"Error applying strategy: {str(e)}")
         return None, None, None
     
     # Check for signals directly in the dataframe
@@ -444,7 +444,7 @@ def main(ticker, strategy_name, start_date=None, end_date=None, show_plot=False)
     # return the strategy_df with an empty trades_df so the chart can be displayed
     if result is None:
         if has_signals:
-            print("⚠️ Strategy has signals but could not calculate complete metrics.")
+            print("Warning: Strategy has signals but could not calculate complete metrics.")
             # Create empty metrics to allow visualization
             empty_metrics = {
                 "Total Trades": 0,
@@ -545,12 +545,13 @@ if __name__ == "__main__":
     parser.add_argument("--strategy", type=str, required=True, help="Strategy name without .py (e.g., strategy1)")
     parser.add_argument("--start_date", type=str, help="Start date in YYYY-MM-DD format")
     parser.add_argument("--end_date", type=str, help="End date in YYYY-MM-DD format")
+    parser.add_argument("--no-plot", action="store_true", help="Run without displaying the plot window")
     args = parser.parse_args()
     
     start_date = pd.Timestamp(args.start_date) if args.start_date else None
     end_date = pd.Timestamp(args.end_date) if args.end_date else None
     
-    main(args.ticker, args.strategy, start_date, end_date, show_plot=True)
+    main(args.ticker, args.strategy, start_date, end_date, show_plot=not args.no_plot)
 
 
    
