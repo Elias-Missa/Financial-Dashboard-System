@@ -4,6 +4,7 @@ matplotlib>=3.5.0
 yfinance>=0.2.0
 scipy>=1.7.0        # For statistical calculations
 ta>=0.10.1          # Technical Analysis (RSI, ADX, etc.)
+customtkinter>=5.2.0  # Modern UI styling
 
 # Note: tkinter is part of the standard library,
 # but on some Linux distros you may need:
