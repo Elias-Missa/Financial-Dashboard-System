@@ -1,0 +1,19 @@
+# MongoDB Atlas (srv connection)
+pymongo[srv]
+python-dotenv>=1.0.0
+
+# Data fetching
+yfinance
+pandas
+numpy
+pandas_datareader
+
+# Feature engineering
+scipy
+arch
+
+# ML training (core)
+scikit-learn
+torch
+matplotlib
+openpyxl
