@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+pymongo[srv]
+yfinance
+pandas
+numpy
+openai
+scipy
+ta
