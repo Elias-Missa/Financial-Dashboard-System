@@ -14,6 +14,7 @@ function CustomTooltip({ active, payload, label }) {
 
   const actual = payload.find(p => p.dataKey === 'close');
   const predicted = payload.find(p => p.dataKey === 'predicted');
+  const isFuture = predicted?.value != null && (actual?.value == null);
 
   return (
     <div className="bg-slate-800 border border-slate-700 rounded-lg p-3 shadow-xl text-xs">
@@ -21,6 +22,7 @@ function CustomTooltip({ active, payload, label }) {
         {new Date(label).toLocaleDateString('en-US', {
           month: 'long', day: 'numeric', year: 'numeric',
         })}
+        {isFuture && <span className="ml-1.5 text-amber-400">(Forecast)</span>}
       </p>
       {actual && actual.value != null && (
         <p className="text-slate-300">
@@ -31,7 +33,7 @@ function CustomTooltip({ active, payload, label }) {
       {predicted && predicted.value != null && (
         <p className="text-emerald-400 mt-0.5">
           <span className="inline-block w-2 h-2 rounded-full bg-emerald-400 mr-1.5" />
-          Predicted: <span className="font-semibold">${predicted.value.toFixed(2)}</span>
+          {isFuture ? 'Forecast' : 'Predicted'}: <span className="font-semibold">${predicted.value.toFixed(2)}</span>
         </p>
       )}
     </div>
@@ -111,6 +113,9 @@ export default function PriceChart({ historical, predictions, loading }) {
           </span>
           <span className="flex items-center gap-1.5">
             <span className="w-3 h-0.5 bg-emerald-400 rounded" /> Predicted
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-3 h-0.5 bg-emerald-400 rounded border-b border-dashed border-emerald-400" /> Forecast
           </span>
         </div>
       </div>

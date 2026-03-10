@@ -65,7 +65,7 @@ def _fetch_spy_prices(years: int = 5) -> pd.DataFrame:
     import yfinance as yf
     end = datetime.datetime.now()
     start = end - datetime.timedelta(days=years * 365)
-    df = yf.download("SPY", start=start, end=end, progress=False)
+    df = yf.download("SPY", start=start, end=end, progress=False, timeout=15)
 
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.droplevel("Ticker")
@@ -110,7 +110,7 @@ class ChatRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/market/historical")
-async def get_historical(years: int = 5):
+def get_historical(years: int = 5):
     try:
         df = _fetch_spy_prices(years)
         return {"data": _df_to_records(df), "ticker": "SPY"}
@@ -119,7 +119,7 @@ async def get_historical(years: int = 5):
 
 
 @app.get("/api/market/predictions")
-async def get_predictions():
+def get_predictions():
     """Return ML predictions converted to predicted prices."""
     if "latest" in _predictions_cache:
         return {"predictions": _predictions_cache["latest"], "metadata": None}
@@ -181,7 +181,7 @@ async def get_predictions():
 
 
 @app.get("/api/market/stats")
-async def get_market_stats():
+def get_market_stats():
     """Current market statistics."""
     try:
         import yfinance as yf
@@ -216,7 +216,7 @@ async def get_market_stats():
 
         vix_val = None
         try:
-            vix_df = yf.download("^VIX", period="5d", progress=False)
+            vix_df = yf.download("^VIX", period="5d", progress=False, timeout=10)
             if isinstance(vix_df.columns, pd.MultiIndex):
                 vix_df.columns = vix_df.columns.droplevel("Ticker")
             if not vix_df.empty:
@@ -273,7 +273,7 @@ async def get_market_stats():
 # ---------------------------------------------------------------------------
 
 @app.get("/api/backtest/strategies")
-async def list_strategies():
+def list_strategies():
     strat_dir = BACKTEST_DIR / "strategies"
     strategies = []
     for f in sorted(strat_dir.glob("*.py")):
@@ -287,7 +287,7 @@ async def list_strategies():
 
 
 @app.post("/api/backtest/run")
-async def run_backtest(req: BacktestRequest):
+def run_backtest(req: BacktestRequest):
     try:
         import backtest as bt
 
@@ -338,7 +338,7 @@ async def run_backtest(req: BacktestRequest):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/chatbot/message")
-async def chat(req: ChatRequest):
+def chat(req: ChatRequest):
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         raise HTTPException(500, detail="OPENAI_API_KEY not configured in .env")
@@ -389,7 +389,7 @@ def _build_features_from_yfinance() -> pd.DataFrame:
     """Build technical features from yfinance SPY data for ML prediction."""
     import yfinance as yf
 
-    df = yf.download("SPY", start="2008-01-01", progress=False)
+    df = yf.download("SPY", start="2008-01-01", progress=False, timeout=20)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.droplevel("Ticker")
 
@@ -437,8 +437,8 @@ def _compute_rsi(prices, period=14):
 
 
 @app.post("/api/ml/generate-predictions")
-async def generate_predictions():
-    """Train Ridge model on SPY features and generate predictions."""
+def generate_predictions():
+    """Train Ridge model on all available SPY data and generate future predictions."""
     try:
         from sklearn.linear_model import Ridge
         from sklearn.preprocessing import StandardScaler
@@ -449,98 +449,139 @@ async def generate_predictions():
         exclude = ["Target_1M", "SPY_Close"]
         feature_cols = [c for c in feats.columns if c not in exclude]
 
-        df = feats.copy()
-        df.replace([np.inf, -np.inf], np.nan, inplace=True)
-        df = df.dropna(subset=[target_col])
-        df[feature_cols] = df[feature_cols].ffill().bfill()
-        df = df.dropna()
+        spy_closes = feats["SPY_Close"]
+        today = feats.index[-1]
 
-        test_start = pd.Timestamp("2023-01-01")
-        embargo = 22
-        test_mask = df.index >= test_start
-        if not test_mask.any():
-            raise HTTPException(400, detail="No test data after 2023-01-01")
+        # --- Prepare training data: all rows with known targets ---
+        labeled = feats.copy()
+        labeled.replace([np.inf, -np.inf], np.nan, inplace=True)
+        labeled = labeled.dropna(subset=[target_col])
+        labeled[feature_cols] = labeled[feature_cols].ffill().bfill()
+        labeled = labeled.dropna()
 
-        test_start_pos = test_mask.argmax()
-        train_end_pos = test_start_pos - embargo - 1
-        if train_end_pos < 252:
+        if len(labeled) < 500:
             raise HTTPException(400, detail="Not enough training data")
 
-        train = df.iloc[:train_end_pos + 1]
-        test = df.iloc[test_start_pos:]
-
-        X_train, y_train = train[feature_cols], train[target_col]
-        X_test, y_test = test[feature_cols], test[target_col]
+        # Train on ALL labeled data (expanding window up to today)
+        X_train = labeled[feature_cols]
+        y_train = labeled[target_col]
 
         scaler = StandardScaler()
         X_train_sc = scaler.fit_transform(X_train)
-        X_test_sc = scaler.transform(X_test)
 
         model = Ridge(alpha=100)
         model.fit(X_train_sc, y_train)
 
-        y_pred_test = model.predict(X_test_sc)
+        train_end_date = labeled.index[-1].strftime("%Y-%m-%d")
 
-        all_feats = feats[feature_cols].ffill().bfill().dropna()
-        latest_row = all_feats.iloc[[-1]]
-        latest_date = latest_row.index[0]
-        latest_sc = scaler.transform(latest_row)
-        latest_pred = float(model.predict(latest_sc)[0])
-        latest_close = float(feats["SPY_Close"].dropna().iloc[-1])
+        # --- Historical comparison predictions (2023+, out-of-sample-ish) ---
+        # For honest evaluation, also train a separate model on pre-2023 data
+        embargo = 22
+        test_start = pd.Timestamp("2023-01-01")
+        test_data = labeled[labeled.index >= test_start]
+        pre_test = labeled[labeled.index < test_start]
 
         results = []
-        spy_closes = feats["SPY_Close"]
-        for i, (date, row) in enumerate(test.iterrows()):
+        if len(pre_test) > 252 and len(test_data) > 0:
+            train_oos = pre_test.iloc[: -embargo] if len(pre_test) > embargo else pre_test
+            X_oos = train_oos[feature_cols]
+            y_oos = train_oos[target_col]
+            scaler_oos = StandardScaler()
+            X_oos_sc = scaler_oos.fit_transform(X_oos)
+            model_oos = Ridge(alpha=100)
+            model_oos.fit(X_oos_sc, y_oos)
+
+            X_test_sc = scaler_oos.transform(test_data[feature_cols])
+            y_pred_oos = model_oos.predict(X_test_sc)
+
+            for i, (date, _) in enumerate(test_data.iterrows()):
+                close_on_date = float(spy_closes.loc[date]) if date in spy_closes.index else None
+                if close_on_date is None:
+                    continue
+                target_date = date + pd.offsets.BDay(21)
+                predicted_close = round(close_on_date * (1 + float(y_pred_oos[i])), 2)
+                actual_close = None
+                if target_date in spy_closes.index:
+                    actual_close = round(float(spy_closes.loc[target_date]), 2)
+
+                results.append({
+                    "predictionDate": date.strftime("%Y-%m-%d"),
+                    "targetDate": target_date.strftime("%Y-%m-%d"),
+                    "predictedReturn": round(float(y_pred_oos[i]), 6),
+                    "predictedClose": predicted_close,
+                    "actualClose": actual_close,
+                    "baseClose": round(close_on_date, 2),
+                    "isFuture": False,
+                })
+
+        # --- Forward predictions using full model ---
+        # Predict from each of the last 30 trading days through today.
+        # Each prediction targets 21 business days ahead, so we get a
+        # spread of future dates extending ~21 days past today.
+        all_feats = feats[feature_cols].ffill().bfill().dropna()
+        recent_rows = all_feats.iloc[-30:]
+
+        forward_results = []
+        for date in recent_rows.index:
+            row_sc = scaler.transform(recent_rows.loc[[date]])
+            pred_return = float(model.predict(row_sc)[0])
             close_on_date = float(spy_closes.loc[date]) if date in spy_closes.index else None
             if close_on_date is None:
                 continue
             target_date = date + pd.offsets.BDay(21)
-            predicted_close = round(close_on_date * (1 + float(y_pred_test[i])), 2)
 
             actual_close = None
             if target_date in spy_closes.index:
                 actual_close = round(float(spy_closes.loc[target_date]), 2)
 
-            results.append({
+            is_future = target_date > today
+
+            forward_results.append({
                 "predictionDate": date.strftime("%Y-%m-%d"),
                 "targetDate": target_date.strftime("%Y-%m-%d"),
-                "predictedReturn": round(float(y_pred_test[i]), 6),
-                "predictedClose": predicted_close,
+                "predictedReturn": round(pred_return, 6),
+                "predictedClose": round(close_on_date * (1 + pred_return), 2),
                 "actualClose": actual_close,
                 "baseClose": round(close_on_date, 2),
+                "isFuture": is_future,
             })
 
-        future_target = latest_date + pd.offsets.BDay(21)
-        results.append({
-            "predictionDate": latest_date.strftime("%Y-%m-%d"),
-            "targetDate": future_target.strftime("%Y-%m-%d"),
-            "predictedReturn": round(latest_pred, 6),
-            "predictedClose": round(latest_close * (1 + latest_pred), 2),
-            "actualClose": None,
-            "baseClose": round(latest_close, 2),
-        })
+        # Merge: historical + forward, deduplicate by targetDate
+        seen_targets = {r["targetDate"] for r in forward_results}
+        combined = [r for r in results if r["targetDate"] not in seen_targets]
+        combined.extend(forward_results)
+        combined.sort(key=lambda r: r["targetDate"])
 
-        _predictions_cache["latest"] = results
+        _predictions_cache["latest"] = combined
         _predictions_cache["ts"] = time.time()
+
+        latest_future = [r for r in forward_results if r["isFuture"]]
+        latest_pred_info = latest_future[-1] if latest_future else forward_results[-1]
 
         try:
             from db_helpers import save_predictions
+            all_pred_returns = [r["predictedReturn"] for r in combined]
+            all_dates = [pd.Timestamp(r["predictionDate"]) for r in combined]
             pred_df = pd.DataFrame({
-                "y_pred": np.concatenate([y_pred_test, [latest_pred]]),
-                "y_true": np.concatenate([y_test.values, [np.nan]]),
-            }, index=list(X_test.index) + [latest_date])
+                "y_pred": all_pred_returns,
+                "y_true": [r.get("actualClose") for r in combined],
+            }, index=all_dates)
             run_id = f"dashboard_ridge_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
             save_predictions(run_id, pred_df, {"model_type": "Ridge", "process": "Dashboard"})
         except Exception:
             pass
 
+        n_future = len([r for r in combined if r["isFuture"]])
         return {
             "status": "success",
-            "n_predictions": len(results),
+            "n_predictions": len(combined),
+            "n_future": n_future,
+            "train_end_date": train_end_date,
             "latest_prediction": {
-                "date": latest_date.strftime("%Y-%m-%d"),
-                "predicted_return_pct": round(latest_pred * 100, 2),
-                "predicted_price": round(latest_close * (1 + latest_pred), 2),
+                "date": latest_pred_info["predictionDate"],
+                "target_date": latest_pred_info["targetDate"],
+                "predicted_return_pct": round(latest_pred_info["predictedReturn"] * 100, 2),
+                "predicted_price": latest_pred_info["predictedClose"],
             },
         }
     except HTTPException:
@@ -555,5 +596,5 @@ async def generate_predictions():
 # ---------------------------------------------------------------------------
 
 @app.get("/api/health")
-async def health():
+def health():
     return {"status": "ok", "timestamp": datetime.datetime.now().isoformat()}
