@@ -21,17 +21,17 @@ ui <- page_fluid(
   theme = bs_theme(
     version = 5,
     preset = "darkly",
-    primary = "#6366f1",        # Indigo - modern, professional
+    primary = "#2563eb",        # Blue-600 - matches dashboard
     secondary = "#64748b",      # Slate gray - neutral
     success = "#10b981",         # Emerald green - success
     info = "#3b82f6",           # Sky blue - informational
     warning = "#f59e0b",        # Amber - warnings
     danger = "#ef4444",         # Red - errors
-    bg = "#0f172a",             # Darker slate background
+    bg = "#020617",             # Slate-950 - matches dashboard main bg
     fg = "#f1f5f9",             # Light slate text
     base_font = font_google("Inter"),
     code_font = font_google("JetBrains Mono"),
-    "navbar-bg" = "#1e293b",
+    "navbar-bg" = "#0f172a",
     "card-bg" = "#1e293b",
     "input-bg" = "#334155",
     "input-border-color" = "#475569",
@@ -170,7 +170,7 @@ ui <- page_fluid(
     tags$style(HTML("
       /* Global Styles - Dark Theme */
       body {
-        background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+        background: linear-gradient(135deg, #020617 0%, #0f172a 100%);
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
         color: #f1f5f9;
         min-height: 100vh;
@@ -179,7 +179,7 @@ ui <- page_fluid(
       /* Typing cursor animation */
       .typing-cursor {
         animation: blink 1s infinite;
-        color: #6366f1;
+        color: #2563eb;
         font-weight: bold;
       }
       
@@ -200,7 +200,7 @@ ui <- page_fluid(
         border: 1px solid #334155;
         border-radius: 12px;
         padding: 24px;
-        background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
+        background: linear-gradient(180deg, #1e293b 0%, #020617 100%);
         margin-bottom: 20px;
         box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
       }
@@ -216,19 +216,19 @@ ui <- page_fluid(
       }
       
       .user-message {
-        background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+        background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
         margin-left: auto;
         text-align: left;
         color: white;
         float: right;
-        box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
-        border: 1px solid #6366f1;
+        box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+        border: 1px solid #2563eb;
       }
       
       .user-message:hover {
-        box-shadow: 0 6px 16px rgba(99, 102, 241, 0.4);
+        box-shadow: 0 6px 16px rgba(37, 99, 235, 0.3);
         transform: translateY(-1px);
-        background: linear-gradient(135deg, #7c3aed 0%, #6366f1 100%);
+        background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
       }
       
       .assistant-message {
@@ -248,7 +248,7 @@ ui <- page_fluid(
       
       /* Code Preview - Dark Theme */
       .code-preview {
-        background: #0f172a;
+        background: #020617;
         border: 1px solid #334155;
         border-radius: 8px;
         padding: 16px;
@@ -279,18 +279,18 @@ ui <- page_fluid(
       }
       
       .metrics-panel h3 {
-        color: #6366f1;
+        color: #2563eb;
         font-size: 1.25rem;
         font-weight: 600;
         margin-bottom: 20px;
-        border-bottom: 2px solid #6366f1;
+        border-bottom: 2px solid #2563eb;
         padding-bottom: 12px;
       }
       
       .metric-card {
         background: #334155;
         border: 1px solid #475569;
-        border-left: 3px solid #6366f1;
+        border-left: 3px solid #2563eb;
         padding: 16px;
         margin: 12px 0;
         border-radius: 8px;
@@ -298,7 +298,7 @@ ui <- page_fluid(
       }
       
       .metric-card:hover {
-        box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+        box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
         transform: translateY(-2px);
         border-left-color: #10b981;
       }
@@ -313,35 +313,14 @@ ui <- page_fluid(
       }
       
       .metric-value {
-        color: #6366f1;
+        color: #2563eb;
         font-size: 1.75rem;
         font-weight: 700;
         margin-top: 4px;
       }
       
       /* Title Bar */
-      .title-bar {
-        background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
-        padding: 32px 40px;
-        border-radius: 12px;
-        margin-bottom: 32px;
-        box-shadow: 0 8px 32px rgba(99, 102, 241, 0.4);
-      }
-      
-      .app-title {
-        color: white;
-        font-size: 2rem;
-        font-weight: 700;
-        margin: 0;
-        letter-spacing: -0.5px;
-      }
-      
-      .app-subtitle {
-        color: rgba(255, 255, 255, 0.85);
-        font-size: 1rem;
-        margin-top: 8px;
-        font-weight: 400;
-      }
+      .title-bar { display: none; }
       
       /* Buttons */
       .btn-custom {
@@ -364,12 +343,12 @@ ui <- page_fluid(
       }
       
       .btn-primary {
-        background-color: #1a237e;
+        background-color: #2563eb;
         color: white;
       }
       
       .btn-primary:hover {
-        background-color: #0d1644;
+        background-color: #1d4ed8;
       }
       
       .btn-success {
@@ -399,11 +378,11 @@ ui <- page_fluid(
       }
       
       .card-header {
-        background: #0f172a;
+        background: #020617;
         border-bottom: 1px solid #334155;
         padding: 16px 20px;
         font-weight: 600;
-        color: #6366f1;
+        color: #2563eb;
         font-size: 1rem;
       }
       
@@ -419,8 +398,8 @@ ui <- page_fluid(
       }
       
       .form-control:focus {
-        border-color: #6366f1;
-        box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+        border-color: #2563eb;
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
         outline: none;
         background-color: #334155;
         color: #ffffff;
@@ -487,7 +466,7 @@ ui <- page_fluid(
         width: 8px;
         height: 8px;
         border-radius: 50%;
-        background-color: #6366f1;
+        background-color: #2563eb;
         animation: dot-bounce 1.4s infinite ease-in-out;
       }
       
@@ -522,7 +501,7 @@ ui <- page_fluid(
         padding: 12px 16px;
         background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
         border: 1px solid #334155;
-        border-left: 3px solid #6366f1;
+        border-left: 3px solid #2563eb;
         border-radius: 8px;
         margin-bottom: 16px;
       }
@@ -537,7 +516,7 @@ ui <- page_fluid(
         width: 16px;
         height: 16px;
         border: 2px solid #334155;
-        border-top-color: #6366f1;
+        border-top-color: #2563eb;
         border-radius: 50%;
         animation: spin 0.8s linear infinite;
       }
@@ -554,14 +533,14 @@ ui <- page_fluid(
       }
       
       .chat-container::-webkit-scrollbar-track {
-        background: #0f172a;
+        background: #020617;
         border-radius: 5px;
       }
       
       .chat-container::-webkit-scrollbar-thumb {
         background: #334155;
         border-radius: 5px;
-        border: 2px solid #0f172a;
+        border: 2px solid #020617;
       }
       
       .chat-container::-webkit-scrollbar-thumb:hover {
@@ -578,7 +557,7 @@ ui <- page_fluid(
       }
       
       .metrics-panel h4 {
-        color: #6366f1;
+        color: #2563eb;
         font-size: 1rem;
         font-weight: 600;
         margin-bottom: 8px;
@@ -597,13 +576,13 @@ ui <- page_fluid(
       
       .modal-header {
         background: #1e293b;
-        border-bottom: 2px solid #6366f1;
+        border-bottom: 2px solid #2563eb;
         padding: 20px 24px;
       }
       
       .modal-body {
         padding: 24px;
-        background: #0f172a;
+        background: #020617;
       }
       
       .modal-footer {
@@ -620,7 +599,7 @@ ui <- page_fluid(
         padding: 16px;
         border: 1px solid #334155;
         border-radius: 6px;
-        background: #0f172a;
+        background: #020617;
         color: #f1f5f9;
         resize: vertical;
         min-height: 300px;
@@ -629,20 +608,10 @@ ui <- page_fluid(
       
       #code_editor:focus {
         outline: none;
-        border-color: #6366f1;
-        box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+        border-color: #2563eb;
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
       }
     "))
-  ),
-  
-  # Title Bar
-  div(class = "title-bar",
-    h1(class = "app-title", 
-      "Market Cipher AI"
-    ),
-    p(class = "app-subtitle", 
-      "Professional Financial Indicator Generator & Backtesting Platform"
-    )
   ),
   
   # Configuration Bar
@@ -707,12 +676,12 @@ ui <- page_fluid(
   div(
     id = "code_preview_panel",
     style = "display: none; position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); 
-            width: 50%; max-width: 900px; max-height: 80vh; background: #1e293b; border: 2px solid #6366f1; 
+            width: 50%; max-width: 900px; max-height: 80vh; background: #1e293b; border: 2px solid #2563eb; 
             border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,0.4); 
             z-index: 1000; overflow: hidden;",
     div(
       id = "code_preview_header",
-      style = "background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%); color: white; padding: 12px 16px; display: flex; 
+      style = "background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%); color: white; padding: 12px 16px; display: flex; 
               justify-content: space-between; align-items: center; cursor: move; user-select: none;",
       tags$h4(id = "code_preview_title", style = "margin: 0; font-size: 16px; pointer-events: none;", "Code Preview"),
       actionButton("close_preview", "×", 
@@ -721,7 +690,7 @@ ui <- page_fluid(
     ),
     div(
       id = "code_preview_content",
-      style = "padding: 16px; max-height: calc(80vh - 120px); overflow-y: auto; background: #0f172a; color: #f1f5f9;"
+      style = "padding: 16px; max-height: calc(80vh - 120px); overflow-y: auto; background: #020617; color: #f1f5f9;"
     ),
     div(
       style = "padding: 12px 16px; border-top: 1px solid #334155; 

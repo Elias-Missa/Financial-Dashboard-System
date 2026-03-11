@@ -39,3 +39,23 @@ export async function generatePredictions() {
   const { data } = await api.post('/ml/generate-predictions');
   return data;
 }
+
+export async function fetchMLConfig() {
+  const { data } = await api.get('/ml/config');
+  return data;
+}
+
+export async function saveMLConfig(updates) {
+  const { data } = await api.put('/ml/config', { updates });
+  return data;
+}
+
+export async function resetMLConfig(keys) {
+  const { data } = await api.post('/ml/config/reset', { updates: keys });
+  return data;
+}
+
+export async function fetchFeatureInventory() {
+  const { data } = await api.get('/ml/features');
+  return data;
+}

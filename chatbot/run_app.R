@@ -23,6 +23,6 @@ cat("Starting Market Cipher AI Chatbot...\n")
 cat("The app will open in your default web browser.\n")
 cat("Press Ctrl+C to stop the server.\n\n")
 
-shiny::runApp(launch.browser = TRUE)
+shiny::runApp(port = 3838, host = "127.0.0.1", launch.browser = FALSE)
 
 

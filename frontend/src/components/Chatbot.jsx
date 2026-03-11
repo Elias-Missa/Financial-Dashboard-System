@@ -1,145 +1,121 @@
-import { useState, useRef, useEffect } from 'react';
-import { sendChatMessage } from '../api';
-import { Send, Loader2, Bot, User, AlertCircle } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
+import { useState, useEffect, useRef } from 'react';
+import { AlertCircle, RefreshCw, ExternalLink } from 'lucide-react';
+
+const SHINY_URL = 'http://localhost:3838';
 
 export default function Chatbot() {
-  const [messages, setMessages] = useState([
-    {
-      role: 'assistant',
-      content:
-        "Hello! I'm your financial AI assistant. I can help with market analysis, " +
-        "trading strategies, technical indicators, and S&P 500 insights. What would you like to discuss?",
-    },
-  ]);
-  const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const endRef = useRef(null);
-  const inputRef = useRef(null);
+  const [status, setStatus] = useState('loading');
+  const iframeRef = useRef(null);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    let cancelled = false;
 
-  async function handleSend() {
-    const text = input.trim();
-    if (!text || loading) return;
-
-    setInput('');
-    setError(null);
-
-    const userMsg = { role: 'user', content: text };
-    setMessages(prev => [...prev, userMsg]);
-    setLoading(true);
-
-    try {
-      const history = messages.map(m => ({ role: m.role, content: m.content }));
-      const res = await sendChatMessage(text, history);
-      setMessages(prev => [...prev, { role: 'assistant', content: res.response }]);
-    } catch (err) {
-      setError(err.response?.data?.detail || err.message || 'Failed to get response');
-    } finally {
-      setLoading(false);
-      inputRef.current?.focus();
+    async function probe() {
+      try {
+        await fetch(SHINY_URL, { mode: 'no-cors', cache: 'no-store' });
+        if (!cancelled) setStatus('connected');
+      } catch {
+        if (!cancelled) setStatus('disconnected');
+      }
     }
+
+    probe();
+    const id = setInterval(probe, 5000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
+  function handleRetry() {
+    setStatus('loading');
+    setTimeout(() => {
+      if (iframeRef.current) {
+        iframeRef.current.src = SHINY_URL;
+      }
+      fetch(SHINY_URL, { mode: 'no-cors', cache: 'no-store' })
+        .then(() => setStatus('connected'))
+        .catch(() => setStatus('disconnected'));
+    }, 300);
   }
 
-  function handleKeyDown(e) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
+  if (status === 'disconnected') {
+    return (
+      <div className="flex flex-col h-full">
+        <div className="p-6 pb-0">
+          <h2 className="text-2xl font-bold text-white">Market Cipher AI</h2>
+          <p className="text-sm text-slate-500 mt-0.5">
+            AI-Powered Signal Generator &amp; Backtesting
+          </p>
+        </div>
+
+        <div className="flex-1 flex items-center justify-center p-6">
+          <div className="max-w-md text-center space-y-4">
+            <div className="mx-auto w-14 h-14 rounded-full bg-amber-500/10 flex items-center justify-center">
+              <AlertCircle size={28} className="text-amber-400" />
+            </div>
+            <h3 className="text-lg font-semibold text-white">Shiny App Not Running</h3>
+            <p className="text-sm text-slate-400 leading-relaxed">
+              The R Shiny chatbot server is not reachable at{' '}
+              <code className="text-xs bg-slate-800 px-1.5 py-0.5 rounded">localhost:3838</code>.
+              Start it with:
+            </p>
+            <div className="bg-slate-800 border border-slate-700 rounded-lg p-3 text-left">
+              <code className="text-xs text-emerald-400 whitespace-pre">
+                cd chatbot{'\n'}Rscript run_app.R
+              </code>
+            </div>
+            <button
+              onClick={handleRetry}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium transition-colors"
+            >
+              <RefreshCw size={14} />
+              Retry Connection
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="p-6 pb-0">
-        <h2 className="text-2xl font-bold text-white">Financial AI Chat</h2>
-        <p className="text-sm text-slate-500 mt-0.5">
-          Powered by GPT-4o &middot; Market analysis &amp; strategy insights
-        </p>
-      </div>
-
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-4">
-        {messages.map((msg, i) => (
-          <div
-            key={i}
-            className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+      <div className="flex items-center justify-between p-4 pb-0">
+        <div>
+          <h2 className="text-xl font-bold text-white">Market Cipher AI</h2>
+          <p className="text-xs text-slate-500 mt-0.5">
+            AI-Powered Signal Generator &amp; Backtesting
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="flex items-center gap-1.5 text-xs text-slate-500">
+            <span className={`w-2 h-2 rounded-full ${status === 'connected' ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
+            {status === 'connected' ? 'Connected' : 'Connecting...'}
+          </span>
+          <a
+            href={SHINY_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="p-1.5 rounded bg-slate-800 text-slate-400 hover:bg-slate-700 transition-colors"
+            title="Open in new tab"
           >
-            {msg.role === 'assistant' && (
-              <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-emerald-600/20 flex items-center justify-center">
-                <Bot size={16} className="text-emerald-400" />
-              </div>
-            )}
-
-            <div
-              className={`max-w-[75%] rounded-xl px-4 py-3 text-sm leading-relaxed ${
-                msg.role === 'user'
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-slate-800 text-slate-200 border border-slate-700'
-              }`}
-            >
-              {msg.role === 'assistant' ? (
-                <div className="prose prose-sm prose-invert max-w-none [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_code]:bg-slate-700 [&_code]:px-1 [&_code]:rounded [&_pre]:bg-slate-900 [&_pre]:p-3 [&_pre]:rounded-lg">
-                  <ReactMarkdown>{msg.content}</ReactMarkdown>
-                </div>
-              ) : (
-                msg.content
-              )}
-            </div>
-
-            {msg.role === 'user' && (
-              <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-blue-600/20 flex items-center justify-center">
-                <User size={16} className="text-blue-400" />
-              </div>
-            )}
-          </div>
-        ))}
-
-        {loading && (
-          <div className="flex gap-3">
-            <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-emerald-600/20 flex items-center justify-center">
-              <Bot size={16} className="text-emerald-400" />
-            </div>
-            <div className="bg-slate-800 border border-slate-700 rounded-xl px-4 py-3">
-              <Loader2 size={16} className="animate-spin text-slate-400" />
-            </div>
-          </div>
-        )}
-
-        {error && (
-          <div className="flex items-center gap-2 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
-            <AlertCircle size={16} />
-            {error}
-          </div>
-        )}
-
-        <div ref={endRef} />
-      </div>
-
-      {/* Input */}
-      <div className="p-4 border-t border-slate-800 bg-slate-900/50">
-        <div className="flex gap-2 max-w-4xl mx-auto">
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Ask about markets, strategies, or financial concepts..."
-            rows={1}
-            className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 resize-none focus:outline-none focus:border-blue-500 transition-colors"
-          />
+            <ExternalLink size={14} />
+          </a>
           <button
-            onClick={handleSend}
-            disabled={loading || !input.trim()}
-            className="flex-shrink-0 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-xl p-3 transition-colors"
+            onClick={handleRetry}
+            className="p-1.5 rounded bg-slate-800 text-slate-400 hover:bg-slate-700 transition-colors"
+            title="Refresh"
           >
-            <Send size={18} />
+            <RefreshCw size={14} />
           </button>
         </div>
+      </div>
+
+      <div className="flex-1 m-4 mt-2 rounded-xl overflow-hidden border border-slate-800">
+        <iframe
+          ref={iframeRef}
+          src={SHINY_URL}
+          title="Market Cipher AI"
+          className="w-full h-full border-0"
+          onLoad={() => setStatus('connected')}
+        />
       </div>
     </div>
   );

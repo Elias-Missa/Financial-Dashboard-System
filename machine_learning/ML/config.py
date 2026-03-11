@@ -286,3 +286,28 @@ MACRO_FFILL_COLS = [
 # ===============================
 USE_OPTUNA = True
 OPTUNA_TRIALS = 20
+
+# ===============================
+# Override Loader (from config_overrides.json)
+# ===============================
+import json as _json
+
+_OVERRIDES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config_overrides.json")
+
+def _load_overrides():
+    if os.path.exists(_OVERRIDES_PATH):
+        try:
+            with open(_OVERRIDES_PATH, "r") as f:
+                return _json.load(f)
+        except (ValueError, IOError):
+            return {}
+    return {}
+
+def _apply_overrides():
+    import sys
+    _mod = sys.modules[__name__]
+    for k, v in _load_overrides().items():
+        if hasattr(_mod, k) and not k.startswith("_"):
+            setattr(_mod, k, v)
+
+_apply_overrides()

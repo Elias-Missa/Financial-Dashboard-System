@@ -1,12 +1,14 @@
 import { useState } from 'react';
-import { LayoutDashboard, FlaskConical, MessageCircle } from 'lucide-react';
+import { LayoutDashboard, FlaskConical, MessageCircle, SlidersHorizontal } from 'lucide-react';
 import Dashboard from './components/Dashboard';
 import Backtest from './components/Backtest';
 import Chatbot from './components/Chatbot';
+import MLConfig from './components/MLConfig';
 
 const TABS = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'backtest', label: 'Backtest', icon: FlaskConical },
+  { id: 'mlconfig', label: 'ML Config', icon: SlidersHorizontal },
   { id: 'chatbot', label: 'Chatbot', icon: MessageCircle },
 ];
 
@@ -52,6 +54,7 @@ export default function App() {
       <main className="flex-1 overflow-y-auto bg-slate-950">
         {activeTab === 'dashboard' && <Dashboard />}
         {activeTab === 'backtest' && <Backtest />}
+        {activeTab === 'mlconfig' && <MLConfig />}
         {activeTab === 'chatbot' && <Chatbot />}
       </main>
     </div>

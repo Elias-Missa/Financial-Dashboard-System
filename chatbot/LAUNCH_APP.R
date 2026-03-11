@@ -42,7 +42,7 @@ cat("  Press Ctrl+C or click the STOP button to close the app.\n\n")
 Sys.sleep(2)
 
 # Launch!
-shiny::runApp(launch.browser = TRUE)
+shiny::runApp(port = 3838, host = "127.0.0.1", launch.browser = FALSE)
 
 
 
