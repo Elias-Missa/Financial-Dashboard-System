@@ -59,3 +59,38 @@ export async function fetchFeatureInventory() {
   const { data } = await api.get('/ml/features');
   return data;
 }
+
+export async function retrainModel() {
+  const { data } = await api.post('/ml/retrain');
+  return data;
+}
+
+export async function fetchRetrainStatus() {
+  const { data } = await api.get('/ml/retrain/status');
+  return data;
+}
+
+export async function fetchModelResults() {
+  const { data } = await api.get('/ml/results');
+  return data;
+}
+
+export async function fetchPresets() {
+  const { data } = await api.get('/ml/presets');
+  return data;
+}
+
+export async function savePreset(name) {
+  const { data } = await api.post('/ml/presets', { name });
+  return data;
+}
+
+export async function loadPreset(name) {
+  const { data } = await api.post(`/ml/presets/${encodeURIComponent(name)}/load`);
+  return data;
+}
+
+export async function deletePreset(name) {
+  const { data } = await api.delete(`/ml/presets/${encodeURIComponent(name)}`);
+  return data;
+}

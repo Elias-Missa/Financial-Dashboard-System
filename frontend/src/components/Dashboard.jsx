@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { fetchHistorical, fetchPredictions, fetchMarketStats, generatePredictions } from '../api';
+import { MODEL_UPDATED_EVENT } from '../modelEvents';
 import PriceChart from './PriceChart';
 import MarketStats from './MarketStats';
 import { RefreshCw, AlertCircle, Sparkles, Loader2 } from 'lucide-react';
@@ -20,11 +21,7 @@ export default function Dashboard() {
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState(null);
 
-  useEffect(() => {
-    loadData();
-  }, [range]);
-
-  async function loadData() {
+  const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -41,7 +38,17 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [range]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  useEffect(() => {
+    const onModelUpdated = () => { loadData(); };
+    window.addEventListener(MODEL_UPDATED_EVENT, onModelUpdated);
+    return () => window.removeEventListener(MODEL_UPDATED_EVENT, onModelUpdated);
+  }, [loadData]);
 
   return (
     <div className="p-6 space-y-6">

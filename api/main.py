@@ -5,6 +5,7 @@ import time
 import datetime
 import importlib
 import traceback
+import threading
 from pathlib import Path
 
 import matplotlib
@@ -1123,6 +1124,640 @@ def reset_ml_config_section(req: MLConfigUpdate):
 
     values = _read_config_values()
     return {"status": "ok", "values": values, "overrides": overrides}
+
+
+# ---------------------------------------------------------------------------
+# ML Retrain Engine
+# ---------------------------------------------------------------------------
+
+_retrain_state: dict = {
+    "status": "idle",
+    "progress": "",
+    "metrics": None,
+    "error": None,
+    "started_at": None,
+    "completed_at": None,
+}
+
+_latest_results_cache: dict = {}
+
+_TORCH_AVAILABLE = False
+try:
+    import torch
+    import torch.nn as nn
+    from torch.utils.data import DataLoader, TensorDataset
+    _TORCH_AVAILABLE = True
+
+    class _SimpleLSTM(nn.Module):
+        def __init__(self, input_dim, hidden_dim=64, num_layers=2, dropout=0.2):
+            super().__init__()
+            self.lstm = nn.LSTM(
+                input_dim, hidden_dim, num_layers,
+                batch_first=True,
+                dropout=dropout if num_layers > 1 else 0,
+            )
+            self.fc = nn.Linear(hidden_dim, 1)
+
+        def forward(self, x):
+            out, _ = self.lstm(x)
+            return self.fc(out[:, -1, :]).squeeze(-1)
+
+    class _SimpleCNN(nn.Module):
+        def __init__(self, input_dim, filters=32, kernel_size=3, num_layers=2, dropout=0.2):
+            super().__init__()
+            layers = [nn.Conv1d(input_dim, filters, kernel_size, padding=kernel_size // 2), nn.ReLU()]
+            for _ in range(num_layers - 1):
+                layers += [nn.Conv1d(filters, filters, kernel_size, padding=kernel_size // 2), nn.ReLU()]
+            self.convs = nn.Sequential(*layers)
+            self.pool = nn.AdaptiveAvgPool1d(1)
+            self.dropout = nn.Dropout(dropout)
+            self.fc = nn.Linear(filters, 1)
+
+        def forward(self, x):
+            x = x.transpose(1, 2)
+            x = self.convs(x)
+            x = self.pool(x).squeeze(-1)
+            x = self.dropout(x)
+            return self.fc(x).squeeze(-1)
+
+    class _SimpleTransformer(nn.Module):
+        def __init__(self, input_dim, model_dim=32, nhead=4, num_layers=2, dropout=0.1):
+            super().__init__()
+            self.input_proj = nn.Linear(input_dim, model_dim)
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=model_dim, nhead=nhead,
+                dim_feedforward=model_dim * 4,
+                dropout=dropout, batch_first=True,
+            )
+            self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+            self.fc = nn.Linear(model_dim, 1)
+
+        def forward(self, x):
+            x = self.input_proj(x)
+            x = self.encoder(x)
+            return self.fc(x[:, -1, :]).squeeze(-1)
+
+except ImportError:
+    pass
+
+
+SKLEARN_MODEL_TYPES = {"LinearRegression", "Ridge", "RandomForest", "XGBoost", "MLP"}
+DEEP_MODEL_TYPES = {"LSTM", "CNN", "Transformer", "TFT"}
+
+
+def _build_sklearn_model(cfg: dict):
+    model_type = cfg.get("MODEL_TYPE", "Ridge")
+
+    if model_type == "LinearRegression":
+        from sklearn.linear_model import LinearRegression
+        return LinearRegression()
+
+    if model_type == "Ridge":
+        from sklearn.linear_model import RidgeCV
+        alphas = cfg.get("RIDGE_ALPHA_GRID", [1, 10, 100])
+        if not alphas:
+            alphas = [100]
+        return RidgeCV(alphas=alphas)
+
+    if model_type == "RandomForest":
+        from sklearn.ensemble import RandomForestRegressor
+        return RandomForestRegressor(
+            n_estimators=cfg.get("RF_N_ESTIMATORS", 100),
+            max_depth=cfg.get("RF_MAX_DEPTH", 10),
+            min_samples_split=cfg.get("RF_MIN_SAMPLES_SPLIT", 5),
+            min_samples_leaf=cfg.get("RF_MIN_SAMPLES_LEAF", 2),
+            random_state=cfg.get("RF_RANDOM_STATE", 42),
+            n_jobs=-1,
+        )
+
+    if model_type == "XGBoost":
+        import xgboost as xgb
+        return xgb.XGBRegressor(
+            n_estimators=cfg.get("XGB_N_ESTIMATORS", 200),
+            learning_rate=cfg.get("XGB_LEARNING_RATE", 0.05),
+            max_depth=cfg.get("XGB_MAX_DEPTH", 4),
+            min_child_weight=cfg.get("XGB_MIN_CHILD_WEIGHT", 5),
+            subsample=cfg.get("XGB_SUBSAMPLE", 0.8),
+            colsample_bytree=cfg.get("XGB_COLSAMPLE_BYTREE", 0.8),
+            gamma=cfg.get("XGB_GAMMA", 0.0),
+            reg_alpha=cfg.get("XGB_REG_ALPHA", 0.0),
+            reg_lambda=cfg.get("XGB_REG_LAMBDA", 1.0),
+            random_state=42, verbosity=0,
+        )
+
+    if model_type == "MLP":
+        from sklearn.neural_network import MLPRegressor
+        hidden = cfg.get("MLP_HIDDEN_LAYERS", [64, 32])
+        return MLPRegressor(
+            hidden_layer_sizes=tuple(hidden) if isinstance(hidden, list) else hidden,
+            learning_rate_init=cfg.get("MLP_LEARNING_RATE_INIT", 0.001),
+            alpha=cfg.get("MLP_ALPHA", 0.0001),
+            max_iter=cfg.get("MLP_MAX_ITER", 500),
+            random_state=42,
+        )
+
+    from sklearn.linear_model import RidgeCV
+    return RidgeCV(alphas=[1, 10, 100])
+
+
+def _build_deep_model(cfg: dict, input_dim: int):
+    model_type = cfg.get("MODEL_TYPE", "LSTM")
+
+    if model_type == "LSTM":
+        return _SimpleLSTM(
+            input_dim,
+            hidden_dim=cfg.get("LSTM_HIDDEN_DIM", 64),
+            num_layers=cfg.get("LSTM_LAYERS", 2),
+            dropout=0.2,
+        )
+
+    if model_type == "CNN":
+        return _SimpleCNN(
+            input_dim,
+            filters=cfg.get("CNN_FILTERS", 32),
+            kernel_size=cfg.get("CNN_KERNEL_SIZE", 3),
+            num_layers=cfg.get("CNN_LAYERS", 2),
+            dropout=cfg.get("CNN_DROPOUT", 0.2),
+        )
+
+    if model_type in ("Transformer", "TFT"):
+        model_dim = cfg.get("TRANSFORMER_MODEL_DIM", 32)
+        nhead = cfg.get("TRANSFORMER_HEADS", 4)
+        if model_dim % nhead != 0:
+            nhead = 1
+        return _SimpleTransformer(
+            input_dim,
+            model_dim=model_dim,
+            nhead=nhead,
+            num_layers=cfg.get("TRANSFORMER_LAYERS", 2),
+            dropout=cfg.get("TRANSFORMER_DROPOUT", 0.1),
+        )
+
+    return _SimpleLSTM(input_dim)
+
+
+def _get_time_steps(cfg: dict) -> int:
+    model_type = cfg.get("MODEL_TYPE", "LSTM")
+    if model_type == "LSTM":
+        return cfg.get("LSTM_TIME_STEPS", 10)
+    if model_type == "CNN":
+        return cfg.get("CNN_TIME_STEPS", 10)
+    if model_type in ("Transformer", "TFT"):
+        return cfg.get("TRANSFORMER_TIME_STEPS", 10)
+    return 10
+
+
+def _create_sequences(X: np.ndarray, y: np.ndarray, time_steps: int):
+    X_seq, y_seq = [], []
+    for i in range(time_steps, len(X)):
+        X_seq.append(X[i - time_steps:i])
+        y_seq.append(y[i])
+    return np.array(X_seq), np.array(y_seq)
+
+
+def _train_torch_model(model, X_train_seq, y_train_seq, cfg, progress_cb=None):
+    model_type = cfg.get("MODEL_TYPE", "LSTM")
+    epochs_map = {"LSTM": "LSTM_EPOCHS", "CNN": "CNN_EPOCHS", "Transformer": "TRANSFORMER_EPOCHS", "TFT": "TRANSFORMER_EPOCHS"}
+    bs_map = {"LSTM": "LSTM_BATCH_SIZE", "CNN": "CNN_BATCH_SIZE", "Transformer": "TRANSFORMER_BATCH_SIZE", "TFT": "TRANSFORMER_BATCH_SIZE"}
+    lr_map = {"LSTM": "LSTM_LEARNING_RATE", "CNN": "CNN_LEARNING_RATE", "Transformer": "TRANSFORMER_LR", "TFT": "TRANSFORMER_LR"}
+
+    epochs = min(cfg.get(epochs_map.get(model_type, "LSTM_EPOCHS"), 50), 100)
+    batch_size = cfg.get(bs_map.get(model_type, "LSTM_BATCH_SIZE"), 32)
+    lr = cfg.get(lr_map.get(model_type, "LSTM_LEARNING_RATE"), 0.001)
+
+    X_t = torch.FloatTensor(X_train_seq)
+    y_t = torch.FloatTensor(y_train_seq)
+    dataset = TensorDataset(X_t, y_t)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    criterion = torch.nn.MSELoss()
+
+    model.train()
+    for epoch in range(epochs):
+        epoch_loss = 0.0
+        for X_batch, y_batch in loader:
+            optimizer.zero_grad()
+            preds = model(X_batch)
+            loss = criterion(preds, y_batch)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            epoch_loss += loss.item()
+        if progress_cb and epoch % max(1, epochs // 10) == 0:
+            progress_cb(f"Training {model_type}: epoch {epoch + 1}/{epochs}, loss={epoch_loss / len(loader):.6f}")
+
+    return model
+
+
+def _compute_retrain_metrics(y_true: np.ndarray, y_pred: np.ndarray):
+    from scipy.stats import spearmanr
+
+    mask = ~(np.isnan(y_true) | np.isnan(y_pred))
+    yt, yp = y_true[mask], y_pred[mask]
+
+    if len(yt) < 5:
+        return {"ml": {}, "strategy": {}}
+
+    rmse = float(np.sqrt(np.mean((yt - yp) ** 2)))
+    mae = float(np.mean(np.abs(yt - yp)))
+    ic_val, ic_pval = spearmanr(yt, yp)
+    dir_acc = float(np.mean(np.sign(yt) == np.sign(yp)))
+
+    ml_metrics = {
+        "RMSE": round(rmse, 6),
+        "MAE": round(mae, 6),
+        "Spearman IC": round(float(ic_val), 4),
+        "IC p-value": round(float(ic_pval), 6),
+        "Directional Accuracy": round(dir_acc * 100, 1),
+    }
+
+    positions = np.where(yp > 0, 1.0, 0.0)
+    strat_returns = pd.Series(positions * yt)
+    ann_factor = 12
+
+    total_ret = float(np.prod(1 + strat_returns) - 1)
+    mean_ret = float(strat_returns.mean())
+    std_ret = float(strat_returns.std())
+    ann_ret = mean_ret * ann_factor
+    ann_vol = std_ret * np.sqrt(ann_factor)
+    sharpe = ann_ret / ann_vol if ann_vol > 0 else 0.0
+
+    equity = (1 + strat_returns).cumprod()
+    peak = equity.cummax()
+    dd = (equity - peak) / peak
+    max_dd = float(dd.min())
+
+    downside = strat_returns[strat_returns < 0]
+    downside_std = float(np.sqrt(np.mean(downside ** 2)) * np.sqrt(ann_factor)) if len(downside) > 0 else 0.0
+    sortino = ann_ret / downside_std if downside_std > 0 else 0.0
+    calmar = ann_ret / abs(max_dd) if max_dd != 0 else 0.0
+
+    wins = strat_returns[strat_returns > 0]
+    losses = strat_returns[strat_returns < 0]
+    win_rate = len(wins) / len(strat_returns) if len(strat_returns) > 0 else 0
+    profit_factor = float(wins.sum() / abs(losses.sum())) if losses.sum() != 0 else 0.0
+
+    strategy_metrics = {
+        "Total Return": f"{total_ret:.2%}",
+        "CAGR": f"{ann_ret:.2%}",
+        "Volatility": f"{ann_vol:.2%}",
+        "Sharpe Ratio": f"{sharpe:.2f}",
+        "Sortino Ratio": f"{sortino:.2f}",
+        "Calmar Ratio": f"{calmar:.2f}",
+        "Max Drawdown": f"{max_dd:.2%}",
+        "Win Rate": f"{win_rate:.1%}",
+        "Profit Factor": f"{profit_factor:.2f}",
+    }
+
+    return {"ml": ml_metrics, "strategy": strategy_metrics}
+
+
+def _run_retrain():
+    global _retrain_state, _latest_results_cache
+    try:
+        _retrain_state["progress"] = "Loading configuration..."
+
+        cfg = _read_config_values()
+        overrides = _read_overrides()
+        cfg.update(overrides)
+
+        model_type = cfg.get("MODEL_TYPE", "Ridge")
+        is_deep = model_type in DEEP_MODEL_TYPES
+
+        if is_deep and not _TORCH_AVAILABLE:
+            raise ValueError(f"PyTorch is required for {model_type} but is not installed")
+
+        _retrain_state["progress"] = f"Building features for {model_type}..."
+
+        feats = _build_features_from_yfinance()
+        target_col = "Target_1M"
+        exclude = ["Target_1M", "SPY_Close"]
+        feature_cols = [c for c in feats.columns if c not in exclude]
+        spy_closes = feats["SPY_Close"]
+        today = feats.index[-1]
+
+        labeled = feats.copy()
+        labeled.replace([np.inf, -np.inf], np.nan, inplace=True)
+        labeled = labeled.dropna(subset=[target_col])
+        labeled[feature_cols] = labeled[feature_cols].ffill().bfill()
+        labeled = labeled.dropna()
+
+        if len(labeled) < 500:
+            raise ValueError("Not enough training data (need >= 500 rows)")
+
+        embargo = 22
+        test_start = pd.Timestamp(cfg.get("TEST_START_DATE", "2023-01-01"))
+        test_data = labeled[labeled.index >= test_start]
+        pre_test = labeled[labeled.index < test_start]
+
+        from sklearn.preprocessing import StandardScaler
+
+        results = []
+        oos_metrics = {"ml": {}, "strategy": {}}
+
+        if len(pre_test) > 252 and len(test_data) > 0:
+            _retrain_state["progress"] = f"Training OOS {model_type} model..."
+            train_oos = pre_test.iloc[:-embargo] if len(pre_test) > embargo else pre_test
+
+            scaler_oos = StandardScaler()
+            X_oos_sc = scaler_oos.fit_transform(train_oos[feature_cols])
+            y_oos = train_oos[target_col].values
+
+            X_test_sc = scaler_oos.transform(test_data[feature_cols])
+            y_true_oos = test_data[target_col].values
+
+            if is_deep:
+                time_steps = _get_time_steps(cfg)
+                all_X = np.vstack([X_oos_sc, X_test_sc])
+                all_y = np.concatenate([y_oos, y_true_oos])
+                X_seq, y_seq = _create_sequences(all_X, all_y, time_steps)
+
+                n_train_seq = max(0, len(X_oos_sc) - time_steps)
+                if n_train_seq == 0:
+                    n_train_seq = len(X_seq) // 2
+                X_train_seq = X_seq[:n_train_seq]
+                y_train_seq = y_seq[:n_train_seq]
+                X_test_seq = X_seq[n_train_seq:]
+                y_test_seq = y_seq[n_train_seq:]
+
+                if len(X_train_seq) < 10 or len(X_test_seq) < 1:
+                    raise ValueError(f"Not enough data for {model_type} sequences (train={len(X_train_seq)}, test={len(X_test_seq)})")
+
+                def _progress(msg):
+                    _retrain_state["progress"] = msg
+
+                model_oos = _build_deep_model(cfg, len(feature_cols))
+                model_oos = _train_torch_model(model_oos, X_train_seq, y_train_seq, cfg, progress_cb=_progress)
+
+                model_oos.eval()
+                with torch.no_grad():
+                    y_pred_oos = model_oos(torch.FloatTensor(X_test_seq)).numpy()
+                y_true_oos_trimmed = y_test_seq
+
+                n_test_predictions = len(y_pred_oos)
+                test_dates_trimmed = test_data.index[-n_test_predictions:] if n_test_predictions <= len(test_data) else test_data.index[:n_test_predictions]
+            else:
+                model_oos = _build_sklearn_model(cfg)
+                model_oos.fit(X_oos_sc, y_oos)
+                y_pred_oos = model_oos.predict(X_test_sc)
+                y_true_oos_trimmed = y_true_oos
+                test_dates_trimmed = test_data.index
+
+            oos_metrics = _compute_retrain_metrics(y_true_oos_trimmed, y_pred_oos)
+
+            for i in range(min(len(y_pred_oos), len(test_dates_trimmed))):
+                date = test_dates_trimmed[i]
+                close_on_date = float(spy_closes.loc[date]) if date in spy_closes.index else None
+                if close_on_date is None:
+                    continue
+                target_date = date + pd.offsets.BDay(21)
+                predicted_close = round(close_on_date * (1 + float(y_pred_oos[i])), 2)
+                actual_close = None
+                if target_date in spy_closes.index:
+                    actual_close = round(float(spy_closes.loc[target_date]), 2)
+                results.append({
+                    "predictionDate": date.strftime("%Y-%m-%d"),
+                    "targetDate": target_date.strftime("%Y-%m-%d"),
+                    "predictedReturn": round(float(y_pred_oos[i]), 6),
+                    "predictedClose": predicted_close,
+                    "actualClose": actual_close,
+                    "baseClose": round(close_on_date, 2),
+                    "isFuture": False,
+                })
+
+        _retrain_state["progress"] = "Generating forward predictions..."
+
+        scaler = StandardScaler()
+        X_train_sc = scaler.fit_transform(labeled[feature_cols])
+        y_train_all = labeled[target_col].values
+
+        if is_deep:
+            time_steps = _get_time_steps(cfg)
+            X_seq_full, y_seq_full = _create_sequences(X_train_sc, y_train_all, time_steps)
+
+            def _progress_fwd(msg):
+                _retrain_state["progress"] = msg
+
+            model_full = _build_deep_model(cfg, len(feature_cols))
+            model_full = _train_torch_model(model_full, X_seq_full, y_seq_full, cfg, progress_cb=_progress_fwd)
+            model_full.eval()
+        else:
+            model_full = _build_sklearn_model(cfg)
+            model_full.fit(X_train_sc, y_train_all)
+
+        all_feats = feats[feature_cols].ffill().bfill().dropna()
+        recent_rows = all_feats.iloc[-30:]
+
+        forward_results = []
+        if is_deep:
+            time_steps = _get_time_steps(cfg)
+            recent_sc = scaler.transform(recent_rows.values)
+            if len(recent_sc) >= time_steps:
+                for i in range(time_steps, len(recent_sc) + 1):
+                    seq = recent_sc[i - time_steps:i][np.newaxis, ...]
+                    with torch.no_grad():
+                        pred_return = float(model_full(torch.FloatTensor(seq)).item())
+                    date = recent_rows.index[i - 1]
+                    close_on_date = float(spy_closes.loc[date]) if date in spy_closes.index else None
+                    if close_on_date is None:
+                        continue
+                    target_date = date + pd.offsets.BDay(21)
+                    actual_close = None
+                    if target_date in spy_closes.index:
+                        actual_close = round(float(spy_closes.loc[target_date]), 2)
+                    forward_results.append({
+                        "predictionDate": date.strftime("%Y-%m-%d"),
+                        "targetDate": target_date.strftime("%Y-%m-%d"),
+                        "predictedReturn": round(pred_return, 6),
+                        "predictedClose": round(close_on_date * (1 + pred_return), 2),
+                        "actualClose": actual_close,
+                        "baseClose": round(close_on_date, 2),
+                        "isFuture": target_date > today,
+                    })
+        else:
+            for date in recent_rows.index:
+                row_sc = scaler.transform(recent_rows.loc[[date]])
+                pred_return = float(model_full.predict(row_sc)[0])
+                close_on_date = float(spy_closes.loc[date]) if date in spy_closes.index else None
+                if close_on_date is None:
+                    continue
+                target_date = date + pd.offsets.BDay(21)
+                actual_close = None
+                if target_date in spy_closes.index:
+                    actual_close = round(float(spy_closes.loc[target_date]), 2)
+                forward_results.append({
+                    "predictionDate": date.strftime("%Y-%m-%d"),
+                    "targetDate": target_date.strftime("%Y-%m-%d"),
+                    "predictedReturn": round(pred_return, 6),
+                    "predictedClose": round(close_on_date * (1 + pred_return), 2),
+                    "actualClose": actual_close,
+                    "baseClose": round(close_on_date, 2),
+                    "isFuture": target_date > today,
+                })
+
+        seen_targets = {r["targetDate"] for r in forward_results}
+        combined = [r for r in results if r["targetDate"] not in seen_targets]
+        combined.extend(forward_results)
+        combined.sort(key=lambda r: r["targetDate"])
+
+        _predictions_cache["latest"] = combined
+        _predictions_cache["ts"] = time.time()
+
+        try:
+            from db_helpers import save_predictions as _db_save
+            pred_df = pd.DataFrame({
+                "y_pred": [r["predictedReturn"] for r in combined],
+                "y_true": [r.get("actualClose") for r in combined],
+            }, index=[pd.Timestamp(r["predictionDate"]) for r in combined])
+            run_id = f"dashboard_{model_type}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            _db_save(run_id, pred_df, {"model_type": model_type, "process": "Dashboard Retrain"})
+        except Exception:
+            pass
+
+        n_future = len([r for r in combined if r.get("isFuture")])
+        run_info = {
+            "model_type": model_type,
+            "n_predictions": len(combined),
+            "n_future": n_future,
+            "train_samples": len(labeled) - len(test_data),
+            "test_samples": len(test_data),
+            "n_features": len(feature_cols),
+            "train_end_date": labeled.index[-1].strftime("%Y-%m-%d"),
+            "test_start_date": test_start.strftime("%Y-%m-%d"),
+            "timestamp": datetime.datetime.now().isoformat(),
+        }
+
+        _retrain_state["status"] = "completed"
+        _retrain_state["progress"] = "Retrain complete"
+        _retrain_state["metrics"] = oos_metrics
+        _retrain_state["completed_at"] = datetime.datetime.now().isoformat()
+        _retrain_state["error"] = None
+
+        _latest_results_cache.update({
+            "run_info": run_info,
+            "metrics": oos_metrics,
+            "timestamp": datetime.datetime.now().isoformat(),
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        _retrain_state["status"] = "failed"
+        _retrain_state["error"] = str(e)
+        _retrain_state["progress"] = f"Failed: {str(e)}"
+
+
+@app.post("/api/ml/retrain")
+def retrain_model():
+    """Retrain model using current ML config and update dashboard predictions."""
+    if _retrain_state.get("status") == "running":
+        raise HTTPException(409, detail="A retrain is already in progress")
+
+    _retrain_state.update({
+        "status": "running",
+        "progress": "Initializing...",
+        "metrics": None,
+        "error": None,
+        "started_at": datetime.datetime.now().isoformat(),
+        "completed_at": None,
+    })
+
+    thread = threading.Thread(target=_run_retrain, daemon=True)
+    thread.start()
+
+    return {"status": "started", "message": "Retrain initiated"}
+
+
+@app.get("/api/ml/retrain/status")
+def retrain_status():
+    """Poll the current retrain job status."""
+    return dict(_retrain_state)
+
+
+@app.get("/api/ml/results")
+def get_model_results():
+    """Return the latest retrain run metrics."""
+    if not _latest_results_cache:
+        return {"results": None}
+    return {"results": _latest_results_cache}
+
+
+# ---------------------------------------------------------------------------
+# ML Config Presets
+# ---------------------------------------------------------------------------
+
+CONFIG_PRESETS_PATH = ML_DIR / "ML" / "config_presets.json"
+
+
+def _read_presets() -> dict:
+    if CONFIG_PRESETS_PATH.exists():
+        try:
+            return json.loads(CONFIG_PRESETS_PATH.read_text())
+        except Exception:
+            return {}
+    return {}
+
+
+def _write_presets(presets: dict):
+    CONFIG_PRESETS_PATH.write_text(json.dumps(presets, indent=2))
+
+
+class PresetSaveRequest(BaseModel):
+    name: str
+
+
+@app.get("/api/ml/presets")
+def list_presets():
+    """Return all saved config presets with summary info."""
+    presets = _read_presets()
+    summaries = []
+    for name, cfg in presets.items():
+        summaries.append({
+            "name": name,
+            "model_type": cfg.get("MODEL_TYPE", "Unknown"),
+            "n_settings": len(cfg),
+        })
+    return {"presets": summaries}
+
+
+@app.post("/api/ml/presets")
+def save_preset(req: PresetSaveRequest):
+    """Save the full current config state as a named preset."""
+    presets = _read_presets()
+    values = _read_config_values()
+    presets[req.name] = values
+    _write_presets(presets)
+    return {"status": "ok", "name": req.name}
+
+
+@app.delete("/api/ml/presets/{name}")
+def delete_preset(name: str):
+    """Delete a saved preset."""
+    presets = _read_presets()
+    if name not in presets:
+        raise HTTPException(404, detail=f"Preset '{name}' not found")
+    del presets[name]
+    _write_presets(presets)
+    return {"status": "ok"}
+
+
+@app.post("/api/ml/presets/{name}/load")
+def load_preset(name: str):
+    """Load a preset by replacing current overrides with preset values."""
+    presets = _read_presets()
+    if name not in presets:
+        raise HTTPException(404, detail=f"Preset '{name}' not found")
+
+    _write_overrides(presets[name])
+
+    try:
+        from ML import config as ml_config
+        importlib.reload(ml_config)
+    except Exception:
+        pass
+
+    values = _read_config_values()
+    return {"status": "ok", "values": values, "overrides": presets[name]}
 
 
 # ---------------------------------------------------------------------------

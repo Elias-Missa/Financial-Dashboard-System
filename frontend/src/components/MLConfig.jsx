@@ -1,9 +1,15 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
-import { fetchMLConfig, saveMLConfig, resetMLConfig, fetchFeatureInventory } from '../api';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
-  Loader2, Save, RotateCcw, AlertCircle, Check,
+  fetchMLConfig, saveMLConfig, resetMLConfig, fetchFeatureInventory,
+  retrainModel, fetchRetrainStatus,
+  fetchPresets, savePreset, loadPreset, deletePreset,
+} from '../api';
+import { emitModelUpdated } from '../modelEvents';
+import ModelResults from './ModelResults';
+import {
+  Loader2, Save, RotateCcw, AlertCircle, Check, Play, BarChart3,
   Brain, Database, Layers, GraduationCap, Scale, Shield, BookOpen, Search,
-  ArrowRight, ChevronDown, ChevronRight,
+  ArrowRight, ChevronDown, ChevronRight, Bookmark, Trash2, Plus, X,
 } from 'lucide-react';
 
 const SUB_TABS = [
@@ -561,6 +567,26 @@ export default function MLConfig() {
   const [overrides, setOverrides] = useState({});
   const [localValues, setLocalValues] = useState({});
 
+  const [retraining, setRetraining] = useState(false);
+  const [retrainProgress, setRetrainProgress] = useState('');
+  const pollRef = useRef(null);
+  const pollErrorCountRef = useRef(0);
+
+  const resultsRef = useRef(null);
+
+  const [presets, setPresets] = useState([]);
+  const [selectedPreset, setSelectedPreset] = useState('');
+  const [showPresetSave, setShowPresetSave] = useState(false);
+  const [presetName, setPresetName] = useState('');
+  const [presetLoading, setPresetLoading] = useState(false);
+
+  const loadPresets = useCallback(async () => {
+    try {
+      const res = await fetchPresets();
+      setPresets(res.presets || []);
+    } catch (_) {}
+  }, []);
+
   const loadConfig = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -577,7 +603,7 @@ export default function MLConfig() {
     }
   }, []);
 
-  useEffect(() => { loadConfig(); }, [loadConfig]);
+  useEffect(() => { loadConfig(); loadPresets(); }, [loadConfig, loadPresets]);
 
   const dirty = useMemo(() => {
     return Object.keys(localValues).some((k) => {
@@ -637,6 +663,136 @@ export default function MLConfig() {
       setToast({ message: err.message || 'Reset failed', type: 'error' });
     }
   }, [meta, activeTab]);
+
+  const handleRetrain = useCallback(async () => {
+    if (retraining) return;
+
+    if (dirty) {
+      setSaving(true);
+      try {
+        const res = await saveMLConfig(changedKeys);
+        setOverrides(res.overrides || {});
+        setServerValues((prev) => ({ ...prev, ...changedKeys }));
+      } catch (err) {
+        setToast({ message: err.message || 'Save failed — retrain aborted', type: 'error' });
+        setSaving(false);
+        return;
+      } finally {
+        setSaving(false);
+      }
+    }
+
+    setRetraining(true);
+    setRetrainProgress('Starting retrain...');
+    pollErrorCountRef.current = 0;
+    try {
+      await retrainModel();
+
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+
+      pollRef.current = setInterval(async () => {
+        try {
+          const st = await fetchRetrainStatus();
+          pollErrorCountRef.current = 0;
+          setRetrainProgress(st.progress || '');
+          if (st.status === 'completed') {
+            clearInterval(pollRef.current);
+            pollRef.current = null;
+            setRetraining(false);
+            setRetrainProgress('');
+            emitModelUpdated({ source: 'retrain', status: st.status });
+            setToast({ message: 'Retrain complete — predictions updated', type: 'success' });
+            setTimeout(() => {
+              resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }, 300);
+          } else if (st.status === 'failed') {
+            clearInterval(pollRef.current);
+            pollRef.current = null;
+            setRetraining(false);
+            setRetrainProgress('');
+            setToast({ message: st.error || 'Retrain failed', type: 'error' });
+          }
+        } catch (_) {
+          pollErrorCountRef.current += 1;
+          if (pollErrorCountRef.current >= 3) {
+            if (pollRef.current) {
+              clearInterval(pollRef.current);
+              pollRef.current = null;
+            }
+            setRetraining(false);
+            setRetrainProgress('');
+            setToast({ message: 'Lost retrain status updates. Please retry.', type: 'error' });
+          }
+        }
+      }, 2000);
+    } catch (err) {
+      setRetraining(false);
+      setRetrainProgress('');
+      setToast({ message: err.response?.data?.detail || 'Failed to start retrain', type: 'error' });
+    }
+  }, [retraining, dirty, changedKeys]);
+
+  useEffect(() => {
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, []);
+
+  const handleSavePreset = useCallback(async () => {
+    const name = presetName.trim();
+    if (!name) return;
+
+    if (dirty) {
+      try {
+        const res = await saveMLConfig(changedKeys);
+        setOverrides(res.overrides || {});
+        setServerValues((prev) => ({ ...prev, ...changedKeys }));
+      } catch (err) {
+        setToast({ message: err.message || 'Save failed — preset not saved', type: 'error' });
+        return;
+      }
+    }
+
+    try {
+      await savePreset(name);
+      setToast({ message: `Preset "${name}" saved`, type: 'success' });
+      setShowPresetSave(false);
+      setPresetName('');
+      loadPresets();
+    } catch (err) {
+      setToast({ message: err.response?.data?.detail || 'Failed to save preset', type: 'error' });
+    }
+  }, [presetName, dirty, changedKeys, loadPresets]);
+
+  const handleLoadPreset = useCallback(async (name) => {
+    if (dirty && !window.confirm('You have unsaved changes. Loading a preset will discard them. Continue?')) return;
+    setPresetLoading(true);
+    try {
+      const res = await loadPreset(name);
+      setServerValues(res.values);
+      setOverrides(res.overrides || {});
+      setLocalValues(res.values);
+      setSelectedPreset(name);
+      setToast({ message: `Preset "${name}" loaded`, type: 'success' });
+    } catch (err) {
+      setToast({ message: err.response?.data?.detail || 'Failed to load preset', type: 'error' });
+    } finally {
+      setPresetLoading(false);
+    }
+  }, [dirty]);
+
+  const handleDeletePreset = useCallback(async (name) => {
+    if (!window.confirm(`Delete preset "${name}"?`)) return;
+    try {
+      await deletePreset(name);
+      setToast({ message: `Preset "${name}" deleted`, type: 'success' });
+      if (selectedPreset === name) setSelectedPreset('');
+      loadPresets();
+    } catch (err) {
+      setToast({ message: err.response?.data?.detail || 'Failed to delete preset', type: 'error' });
+    }
+  }, [selectedPreset, loadPresets]);
 
   const sectionFields = useMemo(() => {
     return Object.entries(meta).filter(([, m]) => m.group === activeTab);
@@ -703,7 +859,100 @@ export default function MLConfig() {
               Reset Section
             </button>
           )}
+          <button
+            onClick={() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-slate-800 text-blue-400 hover:text-blue-300 hover:bg-slate-700 border border-slate-700 transition-colors"
+          >
+            <BarChart3 size={14} />
+            View Results
+          </button>
+          <button
+            onClick={handleRetrain}
+            disabled={retraining}
+            className="flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-lg bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 border border-emerald-700/50 transition-colors disabled:opacity-50"
+          >
+            {retraining ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+            {retraining ? 'Retraining...' : 'Retrain Model'}
+          </button>
         </div>
+      </div>
+
+      {/* Retrain progress bar */}
+      {retraining && retrainProgress && (
+        <div className="flex items-center gap-3 px-4 py-2.5 rounded-lg bg-emerald-900/20 border border-emerald-800/40 text-emerald-300 text-xs">
+          <Loader2 size={14} className="animate-spin flex-shrink-0" />
+          <span className="truncate">{retrainProgress}</span>
+        </div>
+      )}
+
+      {/* Preset bar */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <Bookmark size={14} className="text-slate-500 flex-shrink-0" />
+        <span className="text-xs text-slate-500 font-medium">Presets:</span>
+
+        {presets.length > 0 ? (
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {presets.map((p) => (
+              <div key={p.name} className="flex items-center gap-0">
+                <button
+                  onClick={() => handleLoadPreset(p.name)}
+                  disabled={presetLoading}
+                  className={`px-2.5 py-1 text-xs font-medium rounded-l-md border transition-colors ${
+                    selectedPreset === p.name
+                      ? 'bg-blue-600/20 text-blue-400 border-blue-700/50'
+                      : 'bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700 hover:text-slate-200'
+                  }`}
+                  title={`${p.model_type} (${p.n_settings} settings)`}
+                >
+                  {p.name}
+                </button>
+                <button
+                  onClick={() => handleDeletePreset(p.name)}
+                  className="px-1.5 py-1 text-xs rounded-r-md border border-l-0 bg-slate-800 text-slate-600 border-slate-700 hover:text-red-400 hover:bg-slate-700 transition-colors"
+                >
+                  <Trash2 size={11} />
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <span className="text-xs text-slate-600 italic">None saved</span>
+        )}
+
+        {showPresetSave ? (
+          <div className="flex items-center gap-1.5">
+            <input
+              type="text"
+              value={presetName}
+              onChange={(e) => setPresetName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleSavePreset(); if (e.key === 'Escape') setShowPresetSave(false); }}
+              placeholder="Preset name..."
+              autoFocus
+              className="w-36 bg-slate-800 border border-slate-600 rounded-md px-2 py-1 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500"
+            />
+            <button
+              onClick={handleSavePreset}
+              disabled={!presetName.trim()}
+              className="p-1 rounded bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 disabled:opacity-40 transition-colors"
+            >
+              <Check size={13} />
+            </button>
+            <button
+              onClick={() => { setShowPresetSave(false); setPresetName(''); }}
+              className="p-1 rounded text-slate-500 hover:text-slate-300 transition-colors"
+            >
+              <X size={13} />
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setShowPresetSave(true)}
+            className="flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-md bg-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-700 border border-slate-700 border-dashed transition-colors"
+          >
+            <Plus size={12} />
+            Save Preset
+          </button>
+        )}
       </div>
 
       {/* Sub-tab navigation */}
@@ -830,6 +1079,11 @@ export default function MLConfig() {
           ))}
         </SectionCard>
       )}
+
+      {/* Inline Model Results */}
+      <div ref={resultsRef}>
+        <ModelResults inline />
+      </div>
 
       {/* Floating save bar */}
       {dirty && (
